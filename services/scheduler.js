@@ -1,7 +1,5 @@
 const { parseTimeRange, generateTimeSlots } = require("../utils/timeUtils");
-const { calculateScore } = require("./scoring");
-const { acceptanceProbability } = require("./probability");
-const { generateExplanation } = require("./explanation");
+const { computeScore } = require("./scoring");
 const { simulateDisruption } = require("./simulation");
 
 exports.createSchedule = (data) => {
@@ -16,6 +14,11 @@ exports.createSchedule = (data) => {
     candidateSlots.push(...slots);
   });
 
+  // Extract candidate preferred range (for scoring)
+  const candidateRange = parseTimeRange(candidate.availability[0]);
+  const candidateStart = candidateRange.start;
+  const candidateEnd = candidateRange.end;
+
   // 2️⃣ Check interviewer overlap
   candidateSlots.forEach(slot => {
     let availableInterviewers = [];
@@ -24,7 +27,6 @@ exports.createSchedule = (data) => {
       interviewer.availability.forEach(range => {
         const { day, start, end } = parseTimeRange(range);
 
-        // Proper interval overlap check
         if (
           slot.day === day &&
           slot.start >= start &&
@@ -35,43 +37,40 @@ exports.createSchedule = (data) => {
       });
     });
 
-    // Keep valid slots
     if (availableInterviewers.length > 0) {
       allSlots.push({
         ...slot,
         availableInterviewers,
-        isEarly: slot.start < 12,
-        isPreferred: slot.start >= 10 && slot.start <= 16
+        isPreferred: slot.start >= candidateStart && slot.start < candidateEnd
       });
     }
   });
 
-  // 3️⃣ Apply simulation (X-factor)
-  let processedSlots = allSlots;
+  // 3️⃣ Simulation (optional)
+  let processedSlots = simulate ? simulateDisruption(allSlots) : allSlots;
 
-  if (simulate) {
-    processedSlots = simulateDisruption(allSlots);
-  }
-
-  // 4️⃣ Apply scoring + probability + explanation
+  // 4️⃣ Scoring (FINAL unified logic)
   const results = processedSlots.map(slot => {
-    const score = calculateScore(slot);
-    const probability = acceptanceProbability(slot);
-    const explanation = generateExplanation(slot, score, probability);
+    const interviewerCount = slot.availableInterviewers.length;
+
+    const { score, probability, recommendation, explanation } = computeScore({
+      interviewerCount,
+      isPreferred: slot.isPreferred,
+      hour: slot.start,
+      simulate
+    });
 
     return {
-      ...slot,
+      time: `${slot.day} ${slot.start}-${slot.end}`,
+      availableInterviewers: slot.availableInterviewers,
       score,
       probability,
-      explanation,
-      recommendation:
-        score >= 80 ? "Best Fit" :
-        score >= 60 ? "Good Option" :
-        "Backup"
+      recommendation,
+      explanation
     };
   });
 
-  // 5️⃣ Sort by score
+  // 5️⃣ Sort
   results.sort((a, b) => b.score - a.score);
 
   // 6️⃣ Return top 3
